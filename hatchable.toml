@@ -1,0 +1,23 @@
+[auth]
+enabled = true
+providers = ["email"]
+
+[ai]
+required = true
+description = "AI English tutor for personalized practice, grammar explanations, and answer feedback. Bring a supported provider key or use included account AI credit."
+
+[db.tables.learning_progress]
+read = "own"
+write = "own"
+
+[db.tables.quiz_attempts]
+read = "own"
+write = "own"
+
+[db.tables.skill_assessments]
+read = "own"
+write = "own"
+
+[db.tables.diagnostic_profiles]
+read = "own"
+write = "own"

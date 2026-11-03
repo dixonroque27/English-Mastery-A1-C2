@@ -1,13 +1,10 @@
 [build]
   publish = "."
 
+# Keep the production browser on Hatchable's canonical origin so the
+# injected auth client, session cookies, API and PostgreSQL stay connected.
 [[redirects]]
-  from = "/api/*"
-  to = "https://english-mastery-a1.hatchable.site/api/:splat"
-  status = 200
-  force = true
-
-[[redirects]]
-  from = "/login"
-  to = "https://english-mastery-a1.hatchable.site/login"
+  from = "/*"
+  to = "https://english-mastery-a1.hatchable.site/:splat"
   status = 302
+  force = true
