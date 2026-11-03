@@ -3,9 +3,9 @@ let skillRecords=[];
 let listenText='',listenTurns=[],listenCount=0,listenQs=[];
 const assessed=['grammar','listening','speaking','reading','writing'];
 const skillLabel={grammar:'Grammar',listening:'Listening',speaking:'Speaking',reading:'Reading',writing:'Writing'};
-function rec(tid,s){return skillRecords.find(x=>x.topic_id===tid&&x.skill===s)}
+function rec(tid,s){return skillRecords.filter(x=>x.topic_id===tid&&x.skill===s).reduce((best,x)=>!best||Number(x.score)>Number(best.score)?x:best,null)}
 function hasMastery(tid){return assessed.every(s=>rec(tid,s)&&Number(rec(tid,s).score)>=8.5)}
-function recordSkill(tid,s,score,answers,feedback){let x={topic_id:tid,skill:s,score:score,answers:answers||{},feedback:feedback||''};skillRecords=skillRecords.filter(a=>!(a.topic_id===tid&&a.skill===s));skillRecords.unshift(x);let status=hasMastery(tid)?'completed':'in_progress';progress[tid]={status:status};save(tid,status);if(user)api('/skills',{method:'POST',body:JSON.stringify(x)}).catch(e=>toast('Could not sync assessment: '+e.message));}
+function recordSkill(tid,s,score,answers,feedback){if(!user){toast('Sign in to save your assessment and unlock lessons.');return}let x={topic_id:tid,skill:s,score:score,answers:answers||{},feedback:feedback||''};api('/skills',{method:'POST',body:JSON.stringify(x)}).then(r=>{x.score=Number(r.score);skillRecords.unshift(x);let status=hasMastery(tid)?'completed':'in_progress';progress[tid]={status};return save(tid,status)}).then(()=>{refreshMastery(tid);stats()}).catch(e=>toast('Assessment could not be saved: '+e.message));}
 function safe(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function statusHtml(tid){return assessed.map(s=>'<div class="status-row"><span>'+skillLabel[s]+'</span><b>'+(rec(tid,s)?Number(rec(tid,s).score).toFixed(1)+'/10':'Pending')+'</b></div>').join('')}
 function startListening(lv){
@@ -30,8 +30,8 @@ function playListening(){
 }
 function evaluateAI(tid,skill,lv,prompt,answer,target){
  target.textContent='Evaluating…';
- api('/evaluate',{method:'POST',body:JSON.stringify({skill,level:lv,prompt,answer})}).then(r=>{
- let e=r.evaluation;recordSkill(tid,skill,+Number(e.score).toFixed(1),{prompt,answer},JSON.stringify(e));
+ api('/evaluate',{method:'POST',body:JSON.stringify({skill,level:lv,prompt,answer,topic_id:tid})}).then(async r=>{
+ let e=r.evaluation,x={topic_id:tid,skill,score:+Number(e.score).toFixed(1),answers:{prompt,answer},feedback:JSON.stringify(e)};skillRecords.unshift(x);let status=hasMastery(tid)?'completed':'in_progress';progress[tid]={status};await save(tid,status);
  target.innerHTML='<div class="evaluation-result"><h4>'+Number(e.score).toFixed(1)+'/10</h4><p><b>Strengths:</b> '+safe(e.strengths)+'</p><p><b>Corrections:</b></p><ul>'+(e.corrections||[]).map(x=>'<li>'+safe(x)+'</li>').join('')+'</ul><p><b>Natural version:</b> '+safe(e.natural_version)+'</p><p><b>Explicación:</b> '+safe(e.explanation_es)+'</p></div>';refreshMastery(tid);
  }).catch(e=>target.textContent=e.message+' Your response has not been graded.');
 }
@@ -41,8 +41,8 @@ function refreshMastery(tid){
  $('#nextTopic').disabled=!ok;
 }
 function buildPersonalLesson(lv,mi,ti){
- level=lv;mod=mi;topic=ti;let l=C.find(x=>x[0]===lv),m=l[3][mi],t=m[1][ti],tid=id(lv,mi,ti);
- if(st(tid)!=='completed'){progress[tid]={status:'in_progress'};save(tid,'in_progress')}
+ level=lv;mod=mi;topic=ti;let l=C.find(x=>x[0]===lv),m=l[3][mi],t=m[1][ti],tid=id(lv,mi,ti),globalIndex=all().findIndex(x=>x.id===tid);if(!levelUnlocked(lv)||!all().slice(0,globalIndex).every(x=>hasMastery(x.id))||Array.from({length:mi},(_,i)=>i).some(i=>!modulePassed(lv,i))){toast('Follow the course in order and pass each module exam.');return}
+ if(st(tid)!=='completed'){progress[tid]={status:'in_progress'};save(tid,'in_progress').catch(e=>toast('Progress could not be saved: '+e.message))}
  startListening(lv);nav();$('#pageTitle').textContent=t[0];
  let ex=t[2].split('. ').filter(Boolean),terms=t[3].split(' · ');
  let gram=[
@@ -65,10 +65,10 @@ function buildPersonalLesson(lv,mi,ti){
  $('#lessonContent').querySelectorAll('[data-topic]').forEach(b=>b.onclick=()=>{let n=+b.dataset.topic;if(n>ti&&!hasMastery(tid)){toast('Master this topic before moving forward.');return}buildPersonalLesson(lv,mi,n)});
  $('#backModule').onclick=()=>showLevel(lv);
  $('#nextTopic').onclick=()=>{if(!hasMastery(tid)){toast('Complete all five assessments with at least 8.5/10.');return}if(ti+1<m[1].length)buildPersonalLesson(lv,mi,ti+1);else showLevel(lv)};
- $('#gradeGrammarAI').onclick=()=>{let a=$('#grammarText').value.trim();if(!a){toast('Write your sentence first.');return}evaluateAI(tid,'grammar',lv,'Correct the grammar and explain the relevant rule in Spanish.',a,$('#grammarAIResult'))}; $('#gradeGrammar').onclick=()=>{let n=0,ans={};gram.forEach((q,i)=>{let v=document.querySelector('input[name="g'+i+'"]:checked');ans['q'+i]=v?+v.value:null;if(v&&+v.value===q.c)n++});let score=+(n/3*10).toFixed(1);recordSkill(tid,'grammar',score,ans,'Grammar check');$('#grammarResult').innerHTML='<p><b>'+score.toFixed(1)+'/10</b> · '+n+' of 3 correct. '+(score>=8.5?'Passed.':'Review and try again.')+'</p>';refreshMastery(tid)};
+ $('#gradeGrammarAI').onclick=()=>{let a=$('#grammarText').value.trim();if(!a){toast('Write your sentence first.');return}evaluateAI(tid,'grammar',lv,'Correct the grammar and explain the relevant rule in Spanish.',a,$('#grammarAIResult'))}; $('#gradeGrammar').onclick=()=>{if(gram.some((q,i)=>!document.querySelector('input[name="g'+i+'"]:checked'))){toast('Answer all three grammar questions first.');return}let n=0,ans={};gram.forEach((q,i)=>{let v=document.querySelector('input[name="g'+i+'"]:checked');ans['q'+i]=v?+v.value:null;if(v&&+v.value===q.c)n++});let score=+(n/3*10).toFixed(1);recordSkill(tid,'grammar',score,ans,'Grammar check');$('#grammarResult').innerHTML='<p><b>'+score.toFixed(1)+'/10</b> · '+n+' of 3 correct. '+(score>=8.5?'Passed.':'Review and try again.')+'</p>';refreshMastery(tid)};
  $('#playFirst').onclick=playListening;$('#playAgain').onclick=playListening;
  $('#listenQs').innerHTML=listenQs.map((q,i)=>'<div class="question"><p>'+(i+1)+'. '+q.q+'</p>'+q.a.map((a,j)=>'<label class="option"><input type="radio" name="l'+i+'" value="'+j+'"> '+String.fromCharCode(65+j)+'. '+a+'</label>').join('')+'</div>').join('')+'<button class="primary" id="gradeListening">Submit listening assessment</button><div id="listenResult"></div>';
- $('#gradeListening').onclick=()=>{if(listenCount<2){toast('Listen to the conversation twice before answering.');return}let n=0,ans={};listenQs.forEach((q,i)=>{let v=document.querySelector('input[name="l'+i+'"]:checked');ans['q'+i]=v?+v.value:null;if(v&&+v.value===q.c)n++});let score=+(n/listenQs.length*10).toFixed(1);recordSkill(tid,'listening',score,ans,'Listening comprehension');$('#listenResult').innerHTML='<p><b>'+score.toFixed(1)+'/10</b> · '+n+' of 3 correct.</p>';refreshMastery(tid)};
+ $('#gradeListening').onclick=()=>{if(listenCount<2){toast('Listen to the conversation twice before answering.');return}if(listenQs.some((q,i)=>!document.querySelector('input[name="l'+i+'"]:checked'))){toast('Answer all three listening questions first.');return}let n=0,ans={};listenQs.forEach((q,i)=>{let v=document.querySelector('input[name="l'+i+'"]:checked');ans['q'+i]=v?+v.value:null;if(v&&+v.value===q.c)n++});let score=+(n/listenQs.length*10).toFixed(1);recordSkill(tid,'listening',score,ans,'Listening comprehension');$('#listenResult').innerHTML='<p><b>'+score.toFixed(1)+'/10</b> · '+n+' of 3 correct.</p>';refreshMastery(tid)};
  $('#gradeSpeaking').onclick=()=>{let a=$('#spokenText').value.trim();if(!a){toast('Speak or type your answer first.');return}evaluateAI(tid,'speaking',lv,'Explain the topic and give two examples from real life.',a,$('#speakingResult'))};
  $('#recordSpeech').onclick=()=>{let SR=window.SpeechRecognition||window.webkitSpeechRecognition;if(!SR){$('#speechNote').textContent=' Speech recognition is unavailable. Type your response or use ChatGPT voice mode.';return}let sr=new SR();sr.lang='en-US';sr.continuous=true;sr.interimResults=true;sr.onresult=e=>{let s='';for(let i=0;i<e.results.length;i++)s+=e.results[i][0].transcript+' ';$('#spokenText').value=s.trim()};sr.onerror=()=>$('#speechNote').textContent=' Recording stopped.';sr.onend=()=>$('#speechNote').textContent=' Recording finished. Review your transcript.';sr.start();$('#speechNote').textContent=' Recording…'};
  $('#gradeWriting').onclick=()=>{let a=$('#writingText').value.trim();if(!a){toast('Write your paragraph first.');return}evaluateAI(tid,'writing',lv,'Write 4–7 sentences using the target structure in a real context.',a,$('#writingResult'))};
@@ -81,9 +81,33 @@ openTopic=buildPersonalLesson;
 const baseLoad=load;
 load=async function(){await baseLoad();if(user){try{let r=await api('/skills');skillRecords=r.assessments||[]}catch(e){console.warn(e)}}};
 showLevel=function(lv){
- level=lv;nav();let l=C.find(x=>x[0]===lv),html='<button class="back-link" id="roadmapBack">← Back to overview</button><div class="section-head"><div><span class="eyebrow">'+lv+' · '+l[2].toUpperCase()+'</span><h2>'+l[1]+': '+l[2]+'</h2><p>Complete every topic in order. Each topic requires mastery across the five assessed skills.</p></div></div>';
- l[3].forEach((m,mi)=>{html+='<div style="margin:22px 0"><div class="section-head"><div><span class="eyebrow">MODULE '+(mi+1)+'</span><h2>'+m[0]+'</h2><p>'+unitProgress(lv,mi)+' of '+m[1].length+' topics mastered</p></div></div><div class="topic-list">';m[1].forEach((t,ti)=>{let globalIndex=all().findIndex(x=>x.id===id(lv,mi,ti)),allowed=all().slice(0,globalIndex).every(x=>hasMastery(x.id)),done=hasMastery(id(lv,mi,ti));html+='<button class="topic-row '+(done?'done':'')+'" data-m="'+mi+'" data-t="'+ti+'" '+(!allowed&&!done?'disabled':'')+'><span class="check">'+(done?'✓':'')+'</span><span><b>'+safe(t[0])+'</b><small>'+(done?'Mastered':allowed?'Ready to study':'Complete previous topics first')+'</small></span><span class="arrow">→</span></button>'});html+='</div></div>'});
- $('#dashboard').innerHTML=html;$('#roadmapBack').onclick=()=>location.reload();$('#dashboard').querySelectorAll('[data-m]').forEach(b=>b.onclick=()=>{let globalIndex=all().findIndex(x=>x.id===id(lv,+b.dataset.m,+b.dataset.t));if(!all().slice(0,globalIndex).every(x=>hasMastery(x.id))){toast('Follow the curriculum in order.');return}buildPersonalLesson(lv,+b.dataset.m,+b.dataset.t)});view('dashboard')
+ if(!levelUnlocked(lv)){toast('Complete the previous CEFR level and pass all four module exams first.');return}
+ level=lv;nav();let l=C.find(x=>x[0]===lv),html='<button class="back-link" id="roadmapBack">← Back to overview</button><div class="section-head"><div><span class="eyebrow">'+lv+' · '+l[2].toUpperCase()+'</span><h2>'+l[1]+': '+l[2]+'</h2><p>Complete each topic, master all five skills, and pass every module exam with at least 80%.</p></div></div>';
+ l[3].forEach((m,mi)=>{
+  const ready=m[1].every((t,ti)=>hasMastery(id(lv,mi,ti)))&&(mi===0||modulePassed(lv,mi-1));
+  const passed=modulePassed(lv,mi);
+  html+='<div style="margin:22px 0"><div class="section-head"><div><span class="eyebrow">MODULE '+(mi+1)+'</span><h2>'+safe(m[0])+'</h2><p>'+m[1].filter((t,ti)=>hasMastery(id(lv,mi,ti))).length+' of 3 topics mastered · '+(passed?'Exam passed':ready?'Exam available':'Complete topics and previous exams first')+'</p></div><button class="back-link" data-quiz="'+mi+'" '+(!ready?'disabled':'')+'>'+(passed?'Retake module exam':'Module exam →')+'</button></div><div class="topic-list">';
+  m[1].forEach((t,ti)=>{
+   const tid=id(lv,mi,ti),globalIndex=all().findIndex(x=>x.id===tid),priorTopics=all().slice(0,globalIndex).every(x=>hasMastery(x.id)),priorExams=Array.from({length:mi},(_,i)=>i).every(i=>modulePassed(lv,i)),allowed=priorTopics&&priorExams,done=hasMastery(tid);
+   html+='<button class="topic-row '+(done?'done':'')+'" data-m="'+mi+'" data-t="'+ti+'" '+(!allowed&&!done?'disabled':'')+'><span class="check">'+(done?'✓':'')+'</span><span><b>'+safe(t[0])+'</b><small>'+(done?'Mastered':allowed?'Ready to study':'Complete previous topics and exams first')+'</small></span><span class="arrow">→</span></button>';
+  });
+  html+='</div></div>';
+ });
+ $('#dashboard').innerHTML=html;$('#roadmapBack').onclick=()=>location.reload();
+ $('#dashboard').querySelectorAll('[data-m]').forEach(b=>b.onclick=()=>buildPersonalLesson(lv,+b.dataset.m,+b.dataset.t));
+ $('#dashboard').querySelectorAll('[data-quiz]').forEach(b=>b.onclick=()=>quiz(lv,+b.dataset.quiz));
+ view('dashboard')
 };
-authInit=async function(){let A=window.hatchable?.auth;if(!A)return;try{let s=await A.getSession();user=s?.user||null;paintUser();if(user){await load();}}catch(e){console.warn(e)}};
+authInit=async function(){
+ const A=window.hatchable?.auth;
+ if(!A){stats();return}
+ try{
+  const s=await A.getSession();user=s?.user||null;paintUser();
+  if(user){
+   await load();
+   try{const d=await api('/diagnostic');window.englishDiagnostic=d.profile||null}catch(e){console.warn('Diagnostic profile unavailable',e)}
+  }else{progress={};quizzes=[];skillRecords=[];window.englishDiagnostic=null;stats()}
+  window.dispatchEvent(new CustomEvent('english-auth-ready',{detail:{signedIn:!!user,profile:window.englishDiagnostic||null}}));
+ }catch(e){console.warn(e);stats()}
+};
 authInit();
